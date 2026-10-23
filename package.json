@@ -5,11 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.js",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:server": "node --test server/app.test.js"
   },
   "dependencies": {
+    "express": "^5.3.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.61.0",
     "react": "^19.3.1",

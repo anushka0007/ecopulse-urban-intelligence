@@ -8,6 +8,10 @@ dist-ssr/
 .env
 .env.*
 !.env.example
+*.sqlite
+*.sqlite-*
+*.db
+server/data/
 
 # Logs and operating-system files
 *.log
