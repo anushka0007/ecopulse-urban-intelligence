@@ -9,9 +9,34 @@ const transitions = {
   CANCELLED: { from: ['NEW', 'ASSIGNED', 'DISPATCHED'] },
 }
 
-export function createApp({ db = createDatabase(), allowDemoReset = process.env.NODE_ENV !== 'production' } = {}) {
+export function createApp({ db = createDatabase(), allowDemoReset = process.env.NODE_ENV !== 'production', corsOrigins } = {}) {
   const app = express()
   app.disable('x-powered-by')
+  const configuredOrigins = corsOrigins ?? process.env.CORS_ORIGIN
+  const origins = new Set((Array.isArray(configuredOrigins)
+    ? configuredOrigins
+    : typeof configuredOrigins === 'string'
+      ? configuredOrigins.split(',')
+      : process.env.NODE_ENV === 'production'
+        ? []
+        : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5176', 'http://127.0.0.1:5176'])
+    .map(origin => origin.trim()).filter(Boolean))
+
+  app.use((req, res, next) => {
+    const origin = req.get('Origin')
+    if (origin) {
+      if (!origins.has(origin)) return res.status(403).json({ error: 'This browser origin is not allowed by the API CORS policy.' })
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Vary', 'Origin')
+    }
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+      res.setHeader('Access-Control-Max-Age', '600')
+      return res.status(204).end()
+    }
+    next()
+  })
   app.use(express.json({ limit: '32kb' }))
 
   const zoneStatement = db.prepare('SELECT id,name,lat,lng,fill,growth,base_load FROM zones WHERE id = ?')

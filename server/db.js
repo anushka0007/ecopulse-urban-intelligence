@@ -30,7 +30,10 @@ export function calculateZone(zone, fill = zone.fill) {
   return { ...zone, fill, ...assessment, load: Math.round(zone.baseLoad * fill / 100) }
 }
 
-export function createDatabase(databasePath = process.env.ECOPULSE_DB_PATH || resolve('server/data/ecopulse.sqlite')) {
+const defaultDatabasePath = process.env.ECOPULSE_DB_PATH
+  || (process.env.RENDER ? '/var/data/ecopulse.sqlite' : resolve('server/data/ecopulse.sqlite'))
+
+export function createDatabase(databasePath = defaultDatabasePath) {
   const path = databasePath === ':memory:' ? databasePath : resolve(databasePath)
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
   const db = new DatabaseSync(path)
