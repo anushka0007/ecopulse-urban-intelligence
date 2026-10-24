@@ -190,7 +190,23 @@ test('enforces transitions, exclusive assignment, availability and cancellation'
   assert.equal((await post(`/api/requests/${b.id}/cancel`)).status, 200)
 }))
 
-test('request status and event timeline persist when the SQLite database is reopened', async () => {
+test('concurrent assignments cannot reserve one vehicle for two requests', async () => withApi(async base => {
+  const create = () => fetch(`${base}/api/requests`, json('POST', { zoneId: 'maj' })).then(r => r.json())
+  const [first, second] = await Promise.all([create(), create()])
+  const assign = id => fetch(`${base}/api/requests/${id}/assign`, json('POST', { vehicleId: 'V-01' }))
+  const responses = await Promise.all([assign(first.id), assign(second.id)])
+  const statuses = responses.map(response => response.status).sort()
+  assert.deepEqual(statuses, [200, 409])
+
+  const requests = await fetch(`${base}/api/requests`).then(r => r.json())
+  const assigned = requests.filter(request => request.vehicleId === 'V-01' && ['ASSIGNED', 'DISPATCHED'].includes(request.status))
+  assert.equal(assigned.length, 1)
+  const vehicle = (await fetch(`${base}/api/vehicles`).then(r => r.json())).find(item => item.id === 'V-01')
+  assert.equal(vehicle.available, false)
+  assert.equal(vehicle.assignedRequestId, assigned[0].id)
+}))
+
+test('requests, assignments, cancellations, notifications and audit events persist when SQLite is reopened', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'ecopulse-api-'))
   const path = join(folder, 'persist.sqlite')
   let db = createDatabase(path)
@@ -200,15 +216,26 @@ test('request status and event timeline persist when the SQLite database is reop
     const base = `http://127.0.0.1:${server.address().port}`
     const created = await fetch(`${base}/api/requests`, json('POST', { zoneId: 'maj' })).then(r => r.json())
     await fetch(`${base}/api/requests/${created.id}/assign`, json('POST', { vehicleId: 'V-02' }))
+    await fetch(`${base}/api/notifications/simulate`, json('POST', { requestId: created.id }))
+    await fetch(`${base}/api/requests/${created.id}/dispatch`, json('POST', {}))
+    await fetch(`${base}/api/requests/${created.id}/cancel`, json('POST', {}))
     await new Promise(resolve => server.close(resolve)); db.close()
     db = createDatabase(path)
     server = createServer(createApp({ db }))
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-    const persisted = await fetch(`http://127.0.0.1:${server.address().port}/api/requests`).then(r => r.json())
+    const reopenedBase = `http://127.0.0.1:${server.address().port}`
+    const persisted = await fetch(`${reopenedBase}/api/requests`).then(r => r.json())
     assert.equal(persisted[0].id, created.id)
-    assert.equal(persisted[0].status, 'ASSIGNED')
-    assert.equal(persisted[0].vehicleId, 'V-02')
-    assert.deepEqual(persisted[0].events.map(event => event.status), ['NEW', 'ASSIGNED'])
+    assert.equal(persisted[0].status, 'CANCELLED')
+    assert.equal(persisted[0].vehicleId, null)
+    assert.deepEqual(persisted[0].events.map(event => event.status), ['NEW', 'ASSIGNED', 'NOTIFIED', 'DISPATCHED', 'CANCELLED'])
+    const vehicles = await fetch(`${reopenedBase}/api/vehicles`).then(r => r.json())
+    assert.equal(vehicles.find(vehicle => vehicle.id === 'V-02').available, true)
+    const notifications = await fetch(`${reopenedBase}/api/notifications`).then(r => r.json())
+    assert.equal(notifications.length, 1)
+    assert.equal(notifications[0].requestId, created.id)
+    const audit = await fetch(`${reopenedBase}/api/audit/events`).then(r => r.json())
+    assert.deepEqual(audit.events.map(event => event.status), ['CANCELLED', 'DISPATCHED', 'NOTIFIED', 'ASSIGNED', 'NEW'])
   } finally {
     if (server.listening) await new Promise(resolve => server.close(resolve))
     db.close()

@@ -16,3 +16,16 @@
 :focus-visible{outline:2px solid #65e0c0;outline-offset:2px}.primary:disabled,.secondary:disabled,.ghost:disabled{opacity:.55;cursor:wait}
 @media(max-width:900px){.fleet-strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:520px){.fleet-strip{grid-template-columns:1fr}}
+
+@media(max-width:600px){.dashboard-grid,.lower-grid,.dispatch-grid,.scenario-grid,.method-grid{grid-template-columns:minmax(0,1fr)}}
+.dashboard-grid>*{min-width:0}
+@media(max-width:360px){.head-actions{flex-wrap:wrap;justify-content:flex-start}.head-actions>.updated{margin-left:auto}.bar-chart{overflow:hidden}.legend-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.queue-row{grid-template-columns:16px 7px minmax(0,1fr) 28px max-content;gap:4px}.queue-name{min-width:0}}
+
+:root[data-api-status="connecting"] .live-status{color:#edc65d}
+:root[data-api-status="connected"] .live-status{color:#71cdb8}
+:root[data-api-status="offline"] .live-status{color:#f0b36b}
+:root[data-api-status="offline"] .live-status .pulse{background:#f0b36b;box-shadow:none}
+:root[data-notice-tone="warning"] .toast{border-color:#705b2d;background:#2b2618;color:#f0d58e}
+:root[data-notice-tone="error"] .toast{border-color:#713f45;background:#2b191d;color:#ffc0c0}
+:root[data-notice-tone="warning"] .toast>svg:first-child,:root[data-notice-tone="error"] .toast>svg:first-child{display:none}
+:root[data-notice-tone="warning"] .toast::before,:root[data-notice-tone="error"] .toast::before{content:'!';width:16px;height:16px;flex:0 0 16px;border:1px solid currentColor;border-radius:50%;display:grid;place-items:center;font:700 10px var(--mono)}
