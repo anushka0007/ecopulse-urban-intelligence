@@ -101,12 +101,16 @@ test('request status and event timeline persist when the SQLite database is reop
 })
 
 test('notification endpoint records a simulated in-app event only', async () => withApi(async base => {
-  const response = await fetch(`${base}/api/notifications/simulate`, json('POST', { zoneId: 'maj' }))
+  const request = await fetch(`${base}/api/requests`, json('POST', { zoneId: 'maj' })).then(r => r.json())
+  const response = await fetch(`${base}/api/notifications/simulate`, json('POST', { requestId: request.id }))
   const event = await response.json()
   assert.equal(response.status, 201)
   assert.equal(event.simulated, true)
+  assert.equal(event.requestId, request.id)
   assert.match(event.message, /No external message was sent/)
   assert.equal((await (await fetch(`${base}/api/notifications`)).json()).length, 1)
+  const audit = await fetch(`${base}/api/audit/events?status=NOTIFIED`).then(r => r.json())
+  assert.equal(audit.pagination.total, 1)
 }))
 
 test('demo reset requires explicit confirmation and clears only local demo records', async () => withApi(async base => {
@@ -139,3 +143,92 @@ test('zone API shares explainable risk assessment and category thresholds', asyn
   assert.match(majestic.explanation, /Estimated overflow/)
   assert.match(majestic.explanation, /Dispatch immediately/)
 }))
+
+test('audit feed records committed lifecycle events with pagination and filters', async () => withApi(async base => {
+  const post = (path, body = {}) => fetch(`${base}${path}`, json('POST', body))
+  const createdResponse = await post('/api/requests', { zoneId: 'maj' })
+  const created = await createdResponse.json()
+  assert.equal(createdResponse.status, 201)
+  await post(`/api/requests/${created.id}/assign`, { vehicleId: 'V-01' })
+  await post(`/api/requests/${created.id}/dispatch`)
+  await post(`/api/requests/${created.id}/complete`)
+  const cancelled = await post('/api/requests', { zoneId: 'heb' }).then(r => r.json())
+  await post(`/api/requests/${cancelled.id}/cancel`)
+
+  const response = await fetch(`${base}/api/audit/events?limit=2&offset=2`)
+  const report = await response.json()
+  assert.equal(response.status, 200)
+  assert.equal(report.dataMode, 'SYNTHETIC_DEMO')
+  assert.match(report.disclaimer, /not evidence of real municipal operations/)
+  assert.ok(Date.parse(report.generatedAt))
+  assert.deepEqual(report.pagination, { limit: 2, offset: 2, total: 6, hasMore: true })
+  assert.deepEqual(report.events.map(event => event.status), ['COMPLETED', 'DISPATCHED'])
+  assert.equal(report.events[0].eventType, 'COMPLETED')
+  assert.equal(report.events[0].requestId, created.id)
+  assert.equal(report.events[0].zone, 'Majestic')
+  assert.ok(Date.parse(report.events[0].at))
+  assert.equal((await fetch(`${base}/api/audit/events?status=NEW`).then(r => r.json())).pagination.total, 2)
+  assert.equal((await fetch(`${base}/api/audit/events?status=CANCELLED`).then(r => r.json())).pagination.total, 1)
+  assert.equal((await fetch(`${base}/api/audit/events?status=NOTIFIED`).then(r => r.json())).pagination.total, 0)
+  assert.equal((await fetch(`${base}/api/audit/events?limit=100&offset=0`)).status, 200)
+}))
+
+test('audit feed rejects invalid or ambiguous pagination and status filters', async () => withApi(async base => {
+  for (const query of ['limit=0', 'limit=101', 'limit=1.5', 'limit=-1', 'limit=999999999999999999999', 'offset=-1', 'offset=10001', 'offset=abc', 'status=', 'status=ROOT', 'status=NEW&status=CANCELLED']) {
+    const response = await fetch(`${base}/api/audit/events?${query}`)
+    const body = await response.json()
+    assert.equal(response.status, 400, query)
+    assert.ok(body.requestId, query)
+  }
+}))
+
+test('request validation and status retries do not create incorrect audit entries', async () => withApi(async base => {
+  const malformed = await fetch(`${base}/api/requests`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{' })
+  assert.equal(malformed.status, 400)
+  assert.equal((await malformed.json()).requestId, malformed.headers.get('x-request-id'))
+  const invalidFill = await fetch(`${base}/api/requests`, json('POST', { zoneId: 'maj', fill: '90' }))
+  assert.equal(invalidFill.status, 400)
+  assert.equal((await fetch(`${base}/api/notifications/simulate`, json('POST', { requestId: 42 }))).status, 400)
+
+  const created = await fetch(`${base}/api/requests`, json('POST', { zoneId: 'maj' })).then(r => r.json())
+  const assign = () => fetch(`${base}/api/requests/${created.id}/assign`, json('POST', { vehicleId: 'V-01' }))
+  assert.equal((await assign()).status, 200)
+  assert.equal((await assign()).status, 409)
+  const feed = await fetch(`${base}/api/audit/events`).then(r => r.json())
+  assert.equal(feed.pagination.total, 2)
+  assert.deepEqual(feed.events.map(event => event.status), ['ASSIGNED', 'NEW'])
+}))
+
+test('security headers and request IDs are returned for successful and failed API requests', async () => withApi(async base => {
+  const response = await fetch(`${base}/api/health`)
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+  assert.equal(response.headers.get('referrer-policy'), 'no-referrer')
+  assert.equal(response.headers.get('x-frame-options'), 'DENY')
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  assert.ok(response.headers.get('x-request-id'))
+  const missing = await fetch(`${base}/api/does-not-exist`)
+  assert.equal((await missing.json()).requestId, missing.headers.get('x-request-id'))
+}))
+
+test('failed event insertion rolls back collection request creation', async () => {
+  const db = createDatabase(':memory:')
+  db.exec(`CREATE TRIGGER reject_request_event BEFORE INSERT ON request_events
+    BEGIN SELECT RAISE(ABORT, 'test event failure'); END;`)
+  const app = createApp({ db })
+  const server = createServer(app)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${server.address().port}`
+  try {
+    const response = await fetch(`${base}/api/requests`, json('POST', { zoneId: 'maj' }))
+    assert.equal(response.status, 500)
+    assert.deepEqual(await response.json(), {
+      error: 'The server could not complete the request.',
+      requestId: response.headers.get('x-request-id'),
+    })
+    assert.equal((await fetch(`${base}/api/requests`).then(r => r.json())).length, 0)
+    assert.equal((await fetch(`${base}/api/audit/events`).then(r => r.json())).pagination.total, 0)
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    db.close()
+  }
+})

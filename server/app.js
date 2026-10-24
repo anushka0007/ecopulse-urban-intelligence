@@ -12,6 +12,15 @@ const transitions = {
 export function createApp({ db = createDatabase(), allowDemoReset = process.env.NODE_ENV !== 'production', corsOrigins } = {}) {
   const app = express()
   app.disable('x-powered-by')
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Referrer-Policy', 'no-referrer')
+    res.setHeader('X-Frame-Options', 'DENY')
+    res.setHeader('Cache-Control', 'no-store')
+    req.requestId = randomUUID()
+    res.setHeader('X-Request-Id', req.requestId)
+    next()
+  })
   const configuredOrigins = corsOrigins ?? process.env.CORS_ORIGIN
   const origins = new Set((Array.isArray(configuredOrigins)
     ? configuredOrigins
@@ -37,7 +46,7 @@ export function createApp({ db = createDatabase(), allowDemoReset = process.env.
     }
     next()
   })
-  app.use(express.json({ limit: '32kb' }))
+  app.use(express.json({ limit: '32kb', strict: true }))
 
   const zoneStatement = db.prepare('SELECT id,name,lat,lng,fill,growth,base_load FROM zones WHERE id = ?')
   const findZone = id => {
@@ -170,6 +179,47 @@ export function createApp({ db = createDatabase(), allowDemoReset = process.env.
   app.post('/api/requests/:id/complete', (req, res, next) => changeStatus(req, res, next, 'COMPLETED'))
   app.post('/api/requests/:id/cancel', (req, res, next) => changeStatus(req, res, next, 'CANCELLED'))
 
+  app.get('/api/audit/events', (req, res, next) => {
+    try {
+      const { limit: rawLimit = '50', offset: rawOffset = '0', status: rawStatus } = req.query
+      if (typeof rawLimit !== 'string' || !/^\d+$/.test(rawLimit) || !Number.isSafeInteger(Number(rawLimit)) || Number(rawLimit) < 1 || Number(rawLimit) > 100) {
+        return res.status(400).json({ error: 'limit must be an integer from 1 to 100.', requestId: req.requestId })
+      }
+      if (typeof rawOffset !== 'string' || !/^\d+$/.test(rawOffset) || !Number.isSafeInteger(Number(rawOffset)) || Number(rawOffset) > 10000) {
+        return res.status(400).json({ error: 'offset must be an integer from 0 to 10000.', requestId: req.requestId })
+      }
+      if (rawStatus !== undefined && typeof rawStatus !== 'string') {
+        return res.status(400).json({ error: 'status must be a single supported request event status.', requestId: req.requestId })
+      }
+      const status = rawStatus === undefined ? null : rawStatus.toUpperCase()
+      const allowedStatuses = new Set(['NEW', 'ASSIGNED', 'DISPATCHED', 'COMPLETED', 'CANCELLED', 'NOTIFIED'])
+      if (status !== null && !allowedStatuses.has(status)) {
+        return res.status(400).json({ error: 'status must be NEW, ASSIGNED, DISPATCHED, COMPLETED, CANCELLED or NOTIFIED.', requestId: req.requestId })
+      }
+      const limit = Number(rawLimit)
+      const offset = Number(rawOffset)
+      const rows = status
+        ? db.prepare(`SELECT e.id AS eventId,e.request_id AS requestId,e.status AS eventType,e.status,e.at,e.detail,
+            r.zone_id AS zoneId,r.zone_name AS zone,r.vehicle_id AS vehicleId
+            FROM request_events e JOIN requests r ON r.id=e.request_id
+            WHERE e.status=? ORDER BY e.id DESC LIMIT ? OFFSET ?`).all(status, limit, offset)
+        : db.prepare(`SELECT e.id AS eventId,e.request_id AS requestId,e.status AS eventType,e.status,e.at,e.detail,
+            r.zone_id AS zoneId,r.zone_name AS zone,r.vehicle_id AS vehicleId
+            FROM request_events e JOIN requests r ON r.id=e.request_id
+            ORDER BY e.id DESC LIMIT ? OFFSET ?`).all(limit, offset)
+      const total = status
+        ? db.prepare('SELECT COUNT(*) AS count FROM request_events WHERE status=?').get(status).count
+        : db.prepare('SELECT COUNT(*) AS count FROM request_events').get().count
+      res.json({
+        generatedAt: now(),
+        dataMode: 'SYNTHETIC_DEMO',
+        disclaimer: 'Audit entries describe actions recorded in this prototype; they are not evidence of real municipal operations.',
+        pagination: { limit, offset, total, hasMore: offset + rows.length < total },
+        events: rows,
+      })
+    } catch (error) { next(error) }
+  })
+
   app.get('/api/notifications', (_req, res) => {
     res.json(db.prepare('SELECT id,request_id,zone_id,zone_name,at,type,simulated FROM notifications ORDER BY at DESC,rowid DESC LIMIT 50').all().map(row => ({
       id: row.id, requestId: row.request_id, zoneId: row.zone_id, zone: row.zone_name,
@@ -179,13 +229,24 @@ export function createApp({ db = createDatabase(), allowDemoReset = process.env.
 
   app.post('/api/notifications/simulate', (req, res, next) => {
     try {
-      const suppliedId = req.body?.requestId
+      const body = req.body ?? {}
+      if (typeof body !== 'object' || Array.isArray(body)) {
+        return res.status(400).json({ error: 'The request body must be a JSON object.', requestId: req.requestId })
+      }
+      const suppliedId = body.requestId
+      if (suppliedId !== undefined && suppliedId !== null && (typeof suppliedId !== 'string' || !suppliedId.trim() || suppliedId.length > 128)) {
+        return res.status(400).json({ error: 'requestId must be a valid collection request identifier.', requestId: req.requestId })
+      }
       const row = suppliedId
-        ? requestRow.get(suppliedId)
+        ? requestRow.get(suppliedId.trim())
         : db.prepare("SELECT * FROM requests WHERE status IN ('NEW','ASSIGNED','DISPATCHED') ORDER BY created_at DESC LIMIT 1").get()
       if (suppliedId && !row) return res.status(404).json({ error: 'Collection request was not found.' })
-      const suppliedZone = req.body?.zoneId ? findZone(req.body.zoneId) : null
-      if (req.body?.zoneId && !suppliedZone) return res.status(400).json({ error: 'Choose a valid synthetic zone.' })
+      const suppliedZoneId = body.zoneId
+      if (suppliedZoneId !== undefined && suppliedZoneId !== null && (typeof suppliedZoneId !== 'string' || !suppliedZoneId.trim() || suppliedZoneId.length > 64)) {
+        return res.status(400).json({ error: 'zoneId must be a valid synthetic zone identifier.', requestId: req.requestId })
+      }
+      const suppliedZone = suppliedZoneId ? findZone(suppliedZoneId.trim()) : null
+      if (suppliedZoneId && !suppliedZone) return res.status(400).json({ error: 'Choose a valid synthetic zone.', requestId: req.requestId })
       const id = `EV-${randomUUID().slice(0, 12).toUpperCase()}`
       const at = now()
       const zoneId = row?.zone_id || suppliedZone?.id || null
@@ -211,12 +272,15 @@ export function createApp({ db = createDatabase(), allowDemoReset = process.env.
     } catch (error) { next(error) }
   })
 
-  app.use('/api', (_req, res) => res.status(404).json({ error: 'API endpoint was not found.' }))
+  app.use('/api', (req, res) => res.status(404).json({ error: 'API endpoint was not found.', requestId: req.requestId }))
   app.use((error, _req, res, _next) => {
     if (res.headersSent) return
     const status = Number.isInteger(error.status) ? error.status : error.type === 'entity.parse.failed' ? 400 : 500
     if (status >= 500) console.error(error)
-    res.status(status).json({ error: status >= 500 ? 'The server could not complete the request.' : error.message })
+    res.status(status).json({
+      error: status >= 500 ? 'The server could not complete the request.' : error.type === 'entity.parse.failed' ? 'Invalid JSON request body.' : error.message,
+      requestId: _req.requestId,
+    })
   })
   app.locals.db = db
   return app
