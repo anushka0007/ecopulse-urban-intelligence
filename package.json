@@ -12,6 +12,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "test": "npm run test:server",
     "test:server": "node --test server/app.test.js"
   },
   "dependencies": {

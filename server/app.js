@@ -29,7 +29,7 @@ export function createApp({ db = createDatabase(), allowDemoReset = process.env.
       : process.env.NODE_ENV === 'production'
         ? []
         : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5176', 'http://127.0.0.1:5176'])
-    .map(origin => origin.trim()).filter(Boolean))
+    .map(origin => origin.trim().replace(/\/+$/, '')).filter(Boolean))
 
   app.use((req, res, next) => {
     const origin = req.get('Origin')

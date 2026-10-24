@@ -31,16 +31,32 @@ test('health and synthetic zones are available', async () => withApi(async base 
 }))
 
 test('CORS permits configured frontend origins and rejects other origins', async () => withApi(async base => {
-  const allowedOrigin = 'https://ecopulse.example'
+  const allowedOrigin = 'https://ecopulse-frontend-3s6c.onrender.com'
   const allowed = await fetch(`${base}/api/health`, { headers: { Origin: allowedOrigin } })
   assert.equal(allowed.status, 200)
   assert.equal(allowed.headers.get('access-control-allow-origin'), allowedOrigin)
   const preflight = await fetch(`${base}/api/requests`, { method: 'OPTIONS', headers: { Origin: allowedOrigin } })
   assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers.get('access-control-allow-origin'), allowedOrigin)
   assert.equal(preflight.headers.get('access-control-allow-methods'), 'GET,POST,OPTIONS')
   const rejected = await fetch(`${base}/api/health`, { headers: { Origin: 'https://untrusted.example' } })
   assert.equal(rejected.status, 403)
-}, { corsOrigins: ['https://ecopulse.example'] }))
+}, { corsOrigins: ['  https://ecopulse-frontend-3s6c.onrender.com/  '] }))
+
+test('CORS reads and normalizes the deployed frontend origin from the environment', async () => {
+  const previousOrigin = process.env.CORS_ORIGIN
+  process.env.CORS_ORIGIN = 'https://ecopulse-frontend-3s6c.onrender.com/'
+  try {
+    await withApi(async base => {
+      const response = await fetch(`${base}/api/health`, { headers: { Origin: 'https://ecopulse-frontend-3s6c.onrender.com' } })
+      assert.equal(response.status, 200)
+      assert.equal(response.headers.get('access-control-allow-origin'), 'https://ecopulse-frontend-3s6c.onrender.com')
+    })
+  } finally {
+    if (previousOrigin === undefined) delete process.env.CORS_ORIGIN
+    else process.env.CORS_ORIGIN = previousOrigin
+  }
+})
 
 test('validates request creation and creates unique NEW requests with timelines', async () => withApi(async base => {
   assert.equal((await fetch(`${base}/api/requests`, json('POST', { zoneId: 'unknown' }))).status, 400)

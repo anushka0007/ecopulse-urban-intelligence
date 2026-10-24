@@ -16,8 +16,9 @@ export async function apiRequest(path, options = {}) {
       headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
       ...(options.body ? { body: JSON.stringify(options.body) } : {}),
     })
-  } catch {
-    throw new ApiError('EcoPulse API is unreachable. Start the backend to persist dispatch data.', 0)
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : 'No response was received.'
+    throw new ApiError(`EcoPulse API returned no readable response. Check the deployed API URL, the backend CORS_ORIGIN allowlist, and network access (${cause}).`, 0)
   }
   let data
   try { data = await response.json() } catch { data = null }

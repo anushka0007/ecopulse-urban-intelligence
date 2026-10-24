@@ -46,7 +46,7 @@ function AlertControls({zone,prefs,history,onToggle,onCooldown,onTest,onReplay,o
  const zones=useMemo(()=>state.zones.map(enrich),[state.zones]),alertPrefs={...defaults.alertPrefs,...state.alertPrefs},alertHistory=state.alertHistory||[],requests=state.requests,active=requests.filter(r=>!['COMPLETED','CANCELLED'].includes(r.status)),vehicles=state.vehicles.map(v=>({...v,available:!requests.some(r=>r.vehicleId===v.id&&['ASSIGNED','DISPATCHED'].includes(r.status))})),critical=zones.filter(z=>z.category==='Critical').length,avg=Math.round(zones.reduce((a,z)=>a+z.fill,0)/zones.length),selectedZone=zones.find(z=>z.id===selected)||zones[0],route=state.route
  const flash=s=>{setNotice(s);setTimeout(()=>setNotice(''),3200)}
  useEffect(()=>{try{localStorage.setItem('ecopulse-state',JSON.stringify(state))}catch{window.setTimeout(()=>flash('Could not save demo state in this browser session.'),0)}},[state])
- useEffect(()=>{let mounted=true;Promise.all([apiGet('/requests'),apiGet('/notifications')]).then(([serverRequests,notifications])=>{if(!mounted)return;setApiStatus('connected');setState(s=>{const merged=new Map(serverRequests.map(r=>[r.id,{...r,_apiPersisted:true}]));s.requests.forEach(r=>{if(!merged.has(r.id))merged.set(r.id,r)});const eventMap=new Map(notifications.map(e=>[e.id,e]));s.events.forEach(e=>{if(!eventMap.has(e.id))eventMap.set(e.id,e)});return {...s,requests:[...merged.values()].sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt)),events:[...eventMap.values()].sort((a,b)=>Date.parse(b.at)-Date.parse(a.at))}})}).catch(()=>{if(mounted)setApiStatus('offline')});return()=>{mounted=false}},[])
+ useEffect(()=>{let mounted=true;Promise.all([apiGet('/requests'),apiGet('/notifications')]).then(([serverRequests,notifications])=>{if(!mounted)return;setApiStatus('connected');setState(s=>{const merged=new Map(serverRequests.map(r=>[r.id,{...r,_apiPersisted:true}]));s.requests.forEach(r=>{if(!merged.has(r.id))merged.set(r.id,r)});const eventMap=new Map(notifications.map(e=>[e.id,e]));s.events.forEach(e=>{if(!eventMap.has(e.id))eventMap.set(e.id,e)});return {...s,requests:[...merged.values()].sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt)),events:[...eventMap.values()].sort((a,b)=>Date.parse(b.at)-Date.parse(a.at))}})}).catch(error=>{if(mounted){setApiStatus('offline');flash(error instanceof Error?error.message:'EcoPulse API sync failed. Dispatch actions will remain browser-only.')}});return()=>{mounted=false}},[])
  function audioContext(){try{if(!window.AudioContext&&!window.webkitAudioContext){flash('Web Audio is unavailable. Visual alerts remain active.');return null}if(!audioRef.current){const Ctx=window.AudioContext||window.webkitAudioContext;audioRef.current=new Ctx()}if(audioRef.current.state==='suspended')audioRef.current.resume().catch(()=>flash('Audio playback is unavailable. Visual alerts remain active.'));return audioRef.current}catch{flash('Audio playback is unavailable. Visual alerts remain active.');return null}}
  function beep(){const ctx=audioContext();if(!ctx)return false;[0,.23].forEach(delay=>{const osc=ctx.createOscillator(),gain=ctx.createGain();osc.type='sine';osc.frequency.value=880;gain.gain.setValueAtTime(.001,ctx.currentTime+delay);gain.gain.exponentialRampToValueAtTime(.13,ctx.currentTime+delay+.015);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+delay+.16);osc.connect(gain);gain.connect(ctx.destination);osc.start(ctx.currentTime+delay);osc.stop(ctx.currentTime+delay+.17)});return true}
  function speakZone(z,test=false){if(!('speechSynthesis'in window)||!window.SpeechSynthesisUtterance){flash('Speech announcements are unavailable in this browser. Visual alerts remain active.');return false}window.speechSynthesis.cancel();const msg=test?`Test alert. Critical waste overflow risk detected in ${z.name}. Risk score ${z.risk} out of 100. Dispatch collection immediately.`:`Critical waste overflow risk detected in ${z.name}. Risk score ${z.risk} out of 100. Dispatch collection immediately.`;const utterance=new SpeechSynthesisUtterance(msg);utterance.rate=.94;utterance.pitch=1;window.speechSynthesis.speak(utterance);return true}
@@ -77,7 +77,7 @@ function AlertControls({zone,prefs,history,onToggle,onCooldown,onTest,onReplay,o
     setApiStatus('offline');const at=Date.now(),createdAt=new Date(at).toISOString(),year=new Date(at).getFullYear();let id
     do{id='EC-'+year+'-'+at.toString(36).toUpperCase()+'-'+(requestSequenceRef.current++).toString(36).toUpperCase()}while(requests.some(r=>r.id===id))
     const req={id,zoneId:z.id,zone:z.name,fill:z.fill,risk:z.risk,reason:z.explanation,action:z.action,vehicleId:null,status:'NEW',createdAt,events:[{status:'NEW',at:createdAt,detail:'Created in browser-only fallback storage.'}]}
-    setState(s=>({...s,requests:[req,...s.requests]}));flash('Backend unavailable. Request '+id+' saved in this browser only.')
+    setState(s=>({...s,requests:[req,...s.requests]}));flash(error.message+' Request '+id+' was saved in this browser only; it is not in backend SQLite.')
    }
   }finally{pendingActionsRef.current.delete('create-request');setPendingRequest(false)}
  }
@@ -91,13 +91,13 @@ function AlertControls({zone,prefs,history,onToggle,onCooldown,onTest,onReplay,o
   const endpoint={ASSIGNED:'assign',DISPATCHED:'dispatch',COMPLETED:'complete',CANCELLED:'cancel'}[status]
   try{
    try{
-    if(!target._apiPersisted)throw new ApiError('This request is stored in browser state only.',0)
+    if(!target._apiPersisted)throw new ApiError('This request exists only in browser storage and cannot be updated in backend SQLite. Check the API connection and CORS_ORIGIN.',0)
     const updated=await apiPost('/requests/'+encodeURIComponent(id)+'/'+endpoint,status==='ASSIGNED'?{vehicleId:vehicle}:{})
     setApiStatus('connected');setState(s=>({...s,requests:s.requests.map(r=>r.id===id?{...updated,_apiPersisted:true}:r)}));flash('Request '+id+' updated and saved.')
    }catch(error){
     if(error instanceof ApiError&&error.status!==0){flash(error.message);return}
     setApiStatus('offline');const at=new Date().toISOString()
-    setState(s=>({...s,requests:s.requests.map(r=>{if(r.id!==id||!allowed[r.status]?.includes(status))return r;if(status==='ASSIGNED'&&(!s.vehicles.some(v=>v.id===vehicle)||s.requests.some(other=>other.id!==id&&other.vehicleId===vehicle&&['ASSIGNED','DISPATCHED'].includes(other.status))))return r;return {...r,status,vehicleId:status==='CANCELLED'||status==='COMPLETED'?null:vehicle||r.vehicleId,events:[...(Array.isArray(r.events)?r.events:[]),{status,at,detail:'Updated in browser-only fallback storage.'}]}})}));flash('Backend unavailable. Request updated in this browser only.')
+    setState(s=>({...s,requests:s.requests.map(r=>{if(r.id!==id||!allowed[r.status]?.includes(status))return r;if(status==='ASSIGNED'&&(!s.vehicles.some(v=>v.id===vehicle)||s.requests.some(other=>other.id!==id&&other.vehicleId===vehicle&&['ASSIGNED','DISPATCHED'].includes(other.status))))return r;return {...r,status,vehicleId:status==='CANCELLED'||status==='COMPLETED'?null:vehicle||r.vehicleId,events:[...(Array.isArray(r.events)?r.events:[]),{status,at,detail:'Updated in browser-only fallback storage.'}]}})}));flash(error.message+' Request updated in this browser only; it is not in backend SQLite.')
    }
   }finally{pendingActionsRef.current.delete(id);setPendingIds(ids=>ids.filter(item=>item!==id))}
  }
@@ -113,7 +113,7 @@ function AlertControls({zone,prefs,history,onToggle,onCooldown,onTest,onReplay,o
     if(error instanceof ApiError&&error.status!==0){flash(error.message);return}
     setApiStatus('offline');const at=new Date().toISOString(),id='EV-'+Date.now().toString(36).toUpperCase(),target=active[0]
     setState(s=>({...s,events:[{id,at,type:'MUNICIPAL_NOTIFICATION',simulated:true},...s.events],requests:s.requests.map(r=>r.id===target?.id?{...r,events:[...(r.events||[]),{status:'NOTIFIED',at,detail:'Browser-only simulation; no external message was sent.'}]}:r)}))
-    flash('In-app notification simulated locally only. No external message was sent.')
+    flash(error.message+' Notification was simulated in this browser only; no backend record or external message was created.')
    }
   }finally{pendingActionsRef.current.delete('notification');setPendingNotification(false)}
  }
