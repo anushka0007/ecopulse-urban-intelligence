@@ -58,6 +58,101 @@ test('CORS reads and normalizes the deployed frontend origin from the environmen
   }
 })
 
+test('production CORS allows the deployed frontend when CORS_ORIGIN is unset', async () => {
+  const previousNodeEnv = process.env.NODE_ENV
+  const previousCorsOrigin = process.env.CORS_ORIGIN
+  process.env.NODE_ENV = 'production'
+  delete process.env.CORS_ORIGIN
+  try {
+    await withApi(async base => {
+      const origin = 'https://ecopulse-frontend-3s6c.onrender.com'
+      const health = await fetch(`${base}/api/health`, { headers: { Origin: origin } })
+      assert.equal(health.status, 200)
+      assert.equal(health.headers.get('access-control-allow-origin'), origin)
+
+      const preflight = await fetch(`${base}/api/requests`, {
+        method: 'OPTIONS',
+        headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'Content-Type' },
+      })
+      assert.equal(preflight.status, 204)
+      assert.equal(preflight.headers.get('access-control-allow-origin'), origin)
+      assert.equal(preflight.headers.get('access-control-allow-methods'), 'GET,POST,OPTIONS')
+      assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type')
+    })
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousNodeEnv
+    if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN
+    else process.env.CORS_ORIGIN = previousCorsOrigin
+  }
+})
+
+test('CORS parses comma-separated environment origins and normalizes each entry', async () => {
+  const previousNodeEnv = process.env.NODE_ENV
+  const previousCorsOrigin = process.env.CORS_ORIGIN
+  process.env.NODE_ENV = 'production'
+  process.env.CORS_ORIGIN = ' https://ops.example/ , https://analytics.example '
+  try {
+    await withApi(async base => {
+      for (const origin of ['https://ops.example', 'https://analytics.example']) {
+        const response = await fetch(`${base}/api/health`, { headers: { Origin: origin } })
+        assert.equal(response.status, 200)
+        assert.equal(response.headers.get('access-control-allow-origin'), origin)
+      }
+      const deployedFrontend = await fetch(`${base}/api/health`, {
+        headers: { Origin: 'https://ecopulse-frontend-3s6c.onrender.com' },
+      })
+      assert.equal(deployedFrontend.status, 200)
+    })
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousNodeEnv
+    if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN
+    else process.env.CORS_ORIGIN = previousCorsOrigin
+  }
+})
+
+test('explicit corsOrigins overrides environment and default origins', async () => {
+  const previousNodeEnv = process.env.NODE_ENV
+  const previousCorsOrigin = process.env.CORS_ORIGIN
+  process.env.NODE_ENV = 'production'
+  process.env.CORS_ORIGIN = 'https://environment.example'
+  try {
+    await withApi(async base => {
+      const injected = await fetch(`${base}/api/health`, { headers: { Origin: 'https://injected.example' } })
+      assert.equal(injected.status, 200)
+      const environment = await fetch(`${base}/api/health`, { headers: { Origin: 'https://environment.example' } })
+      assert.equal(environment.status, 403)
+      const deployedDefault = await fetch(`${base}/api/health`, { headers: { Origin: 'https://ecopulse-frontend-3s6c.onrender.com' } })
+      assert.equal(deployedDefault.status, 403)
+    }, { corsOrigins: ['https://injected.example'] })
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousNodeEnv
+    if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN
+    else process.env.CORS_ORIGIN = previousCorsOrigin
+  }
+})
+
+test('development CORS keeps localhost frontend origins', async () => {
+  const previousNodeEnv = process.env.NODE_ENV
+  const previousCorsOrigin = process.env.CORS_ORIGIN
+  process.env.NODE_ENV = 'development'
+  delete process.env.CORS_ORIGIN
+  try {
+    await withApi(async base => {
+      const response = await fetch(`${base}/api/health`, { headers: { Origin: 'http://localhost:5173' } })
+      assert.equal(response.status, 200)
+      assert.equal(response.headers.get('access-control-allow-origin'), 'http://localhost:5173')
+    })
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousNodeEnv
+    if (previousCorsOrigin === undefined) delete process.env.CORS_ORIGIN
+    else process.env.CORS_ORIGIN = previousCorsOrigin
+  }
+})
+
 test('validates request creation and creates unique NEW requests with timelines', async () => withApi(async base => {
   assert.equal((await fetch(`${base}/api/requests`, json('POST', { zoneId: 'unknown' }))).status, 400)
   assert.equal((await fetch(`${base}/api/requests`, json('POST', { zoneId: 'maj', fill: 101 }))).status, 400)

@@ -9,7 +9,18 @@ const transitions = {
   CANCELLED: { from: ['NEW', 'ASSIGNED', 'DISPATCHED'] },
 }
 
-export function createApp({ db = createDatabase(), allowDemoReset = process.env.NODE_ENV !== 'production', corsOrigins } = {}) {
+const deployedFrontendOrigin = 'https://ecopulse-frontend-3s6c.onrender.com'
+const developmentOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5176', 'http://127.0.0.1:5176']
+
+function normalizeOrigins(value) {
+  const values = Array.isArray(value) ? value : [value]
+  return values
+    .flatMap(origin => typeof origin === 'string' ? origin.split(',') : [])
+    .map(origin => origin.trim().replace(/\/+$/, ''))
+    .filter(Boolean)
+}
+
+export function createApp({ db = createDatabase(), allowDemoReset = process.env.NODE_ENV !== 'production', corsOrigins: corsOriginsOverride } = {}) {
   const app = express()
   app.disable('x-powered-by')
   app.use((req, res, next) => {
@@ -21,15 +32,10 @@ export function createApp({ db = createDatabase(), allowDemoReset = process.env.
     res.setHeader('X-Request-Id', req.requestId)
     next()
   })
-  const configuredOrigins = corsOrigins ?? process.env.CORS_ORIGIN
-  const origins = new Set((Array.isArray(configuredOrigins)
-    ? configuredOrigins
-    : typeof configuredOrigins === 'string'
-      ? configuredOrigins.split(',')
-      : process.env.NODE_ENV === 'production'
-        ? []
-        : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5176', 'http://127.0.0.1:5176'])
-    .map(origin => origin.trim().replace(/\/+$/, '')).filter(Boolean))
+  const configuredOrigins = corsOriginsOverride === undefined
+    ? [deployedFrontendOrigin, process.env.CORS_ORIGIN, ...(process.env.NODE_ENV === 'production' ? [] : developmentOrigins)]
+    : corsOriginsOverride
+  const origins = new Set(normalizeOrigins(configuredOrigins))
 
   app.use((req, res, next) => {
     const origin = req.get('Origin')

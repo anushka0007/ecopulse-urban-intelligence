@@ -37,31 +37,34 @@ Open the local URL printed by Vite. By default, the API listens on port 3001 and
 
 ## Deploying the demo
 
-The frontend and API are separate services. Build the Vite frontend for Vercel and run the Express API as a Render Web Service. These steps configure deployment; they do not deploy the project automatically.
+The frontend and API are separate Render services. The settings below match this repository, whose `package.json` is at its root. They configure deployment but do not deploy automatically.
 
-### Vercel frontend
+### Render frontend
 
-1. Import the repository into Vercel. Set the project Root Directory to `ecopulse-app` when the repository root contains this folder; use `.` if `package.json` is at the repository root.
-2. Select Vite (or configure equivalent settings): Install Command `npm install`, Build Command `npm run build`, Output Directory `dist`.
-3. In Vercel Project Settings → Environment Variables, set `VITE_API_BASE_URL` to the Render service's HTTPS origin, for example `https://ecopulse-api.onrender.com`. Enter only the origin, without `/api` or a trailing path. Vite includes `/api` in its requests.
-4. Redeploy after changing the variable. Vite variables are embedded at build time. Configure environments separately; preview builds need an API whose CORS allowlist contains that preview's exact origin, or use a stable preview domain.
+Create a Render **Static Site** from the repository with Root Directory `.`, Build Command `npm install && npm run build`, and Publish Directory `dist`. Set this build-time environment variable:
 
-### Render API and SQLite storage
+| Variable | Value |
+| --- | --- |
+| `VITE_API_BASE_URL` | `https://ecopulse-urban-intelligence-1.onrender.com` |
 
-1. Create a Render **Web Service** from the repository and set its Root Directory to `ecopulse-app` (or `.` if appropriate), Build Command to `npm install`, and Start Command to `npm run server`.
-2. Use Node 22.13.x or later within major 22. Set `NODE_VERSION` to a supported Node 22 release such as `22.22.0`; the package engine requires Node `>=22.13.0 <23`.
-3. Set these service environment variables:
+Vite embeds this value in the built assets. Save the variable and redeploy/rebuild the frontend after changing it. Set the API origin only, without `/api` or a trailing slash.
 
-   | Variable | Value |
-   | --- | --- |
-   | `NODE_ENV` | `production` |
-   | `NODE_VERSION` | `22.22.0` (or another supported 22.x release) |
-   | `CORS_ORIGIN` | Exact deployed frontend origin, e.g. `https://ecopulse-demo.vercel.app`; comma-separate exact origins only if needed |
-   | `ECOPULSE_DB_PATH` | `/var/data/ecopulse.sqlite` |
+### Render backend and SQLite storage
 
-   Render supplies `PORT`; leave it platform-managed. The server binds to `0.0.0.0` and uses this value. Set the health check path to `/api/health`.
-4. Attach a Render persistent disk to the web service with mount path `/var/data`. The SQLite file must be inside that mount. **Without an attached and correctly mounted persistent disk, SQLite files on Render's service filesystem are ephemeral and may be lost on redeploy or restart.** Render persistent disks require a paid web service plan. Keep this single-instance for the SQLite demo; multi-instance coordination and backups are not configured.
-5. Copy the Render service origin into Vercel's `VITE_API_BASE_URL`, then redeploy. CORS permits only exact origins in `CORS_ORIGIN`; production has no wildcard fallback. Use origins without paths or trailing slashes.
+Create a Render **Web Service** from the repository with Root Directory `.`, Build Command `npm install`, Start Command `npm run server`, and health check path `/api/health`. Use Node.js `22.13.0` or newer within major version 22; the package engine range is `>=22.13.0 <23`. Set:
+
+| Variable | Value |
+| --- | --- |
+| `NODE_ENV` | `production` |
+| `NODE_VERSION` | `22.22.0` (or another supported Node 22 release) |
+| `CORS_ORIGIN` | `https://ecopulse-frontend-3s6c.onrender.com` (additional exact origins may be comma-separated) |
+| `ECOPULSE_DB_PATH` | `/tmp/ecopulse.sqlite` on the current free service, or `/var/data/ecopulse.sqlite` with a persistent disk mounted at `/var/data` |
+
+Render supplies `PORT`; leave it platform-managed. The server binds to `0.0.0.0`. Production CORS always includes the deployed EcoPulse frontend origin; `CORS_ORIGIN` adds normalized comma-separated origins. Do not use `*`.
+
+`/tmp/ecopulse.sqlite` is temporary storage and can be lost when the service restarts or redeploys. For persistence, attach a Render disk mounted at `/var/data` and set `ECOPULSE_DB_PATH=/var/data/ecopulse.sqlite`; disk availability and pricing depend on the Render plan. Keep this SQLite deployment to one backend instance; multi-instance coordination and backups are not configured.
+
+For a Vercel frontend instead, use Root Directory `.`, Build Command `npm install && npm run build`, and Output Directory `dist`, with the same `VITE_API_BASE_URL`. Preview frontend origins must be added to the backend's comma-separated `CORS_ORIGIN` or use an approved stable preview domain.
 
 The backend has no user authentication, so deploy only for a controlled demo and do not store sensitive data. Zone readings remain synthetic. Routes and simulator outputs are estimates; notification events are in-app records only, with no SMS or email delivery. SQLite persistence depends on configuring the Render disk above.
 
