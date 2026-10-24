@@ -96,6 +96,11 @@ function AlertControls({zone,prefs,history,onToggle,onCooldown,onTest,onReplay,o
     setApiStatus('connected');setState(s=>({...s,requests:s.requests.map(r=>r.id===id?{...updated,_apiPersisted:true}:r)}));flash('Request '+id+' updated and saved.')
    }catch(error){
     if(error instanceof ApiError&&error.status!==0){flash(error.message);return}
+    if(status==='ASSIGNED'){
+     if(target._apiPersisted)setApiStatus('offline')
+     flash(error.message+' Assignment was not saved; request state was not changed.')
+     return
+    }
     setApiStatus('offline');const at=new Date().toISOString()
     setState(s=>({...s,requests:s.requests.map(r=>{if(r.id!==id||!allowed[r.status]?.includes(status))return r;if(status==='ASSIGNED'&&(!s.vehicles.some(v=>v.id===vehicle)||s.requests.some(other=>other.id!==id&&other.vehicleId===vehicle&&['ASSIGNED','DISPATCHED'].includes(other.status))))return r;return {...r,status,vehicleId:status==='CANCELLED'||status==='COMPLETED'?null:vehicle||r.vehicleId,events:[...(Array.isArray(r.events)?r.events:[]),{status,at,detail:'Updated in browser-only fallback storage.'}]}})}));flash(error.message+' Request updated in this browser only; it is not in backend SQLite.')
    }

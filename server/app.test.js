@@ -174,7 +174,12 @@ test('enforces transitions, exclusive assignment, availability and cancellation'
   const b = await (await post('/api/requests', { zoneId: 'heb' })).json()
   assert.equal((await post(`/api/requests/${a.id}/dispatch`)).status, 409)
   assert.equal((await post(`/api/requests/${a.id}/assign`, { vehicleId: 'V-99' })).status, 400)
-  assert.equal((await post(`/api/requests/${a.id}/assign`, { vehicleId: 'V-01' })).status, 200)
+  const assignedResponse = await post(`/api/requests/${a.id}/assign`, { vehicleId: 'V-01' })
+  const assigned = await assignedResponse.json()
+  assert.equal(assignedResponse.status, 200)
+  assert.equal(assigned.status, 'ASSIGNED')
+  assert.equal(assigned.vehicleId, 'V-01')
+  assert.deepEqual(assigned.events.map(event => event.status), ['NEW', 'ASSIGNED'])
   assert.equal((await post(`/api/requests/${b.id}/assign`, { vehicleId: 'V-01' })).status, 409)
   const occupied = (await fetch(`${base}/api/vehicles`).then(r => r.json())).find(v => v.id === 'V-01')
   assert.equal(occupied.available, false)
@@ -303,7 +308,11 @@ test('request validation and status retries do not create incorrect audit entrie
 
   const created = await fetch(`${base}/api/requests`, json('POST', { zoneId: 'maj' })).then(r => r.json())
   const assign = () => fetch(`${base}/api/requests/${created.id}/assign`, json('POST', { vehicleId: 'V-01' }))
-  assert.equal((await assign()).status, 200)
+  const assignedResponse = await assign()
+  const assigned = await assignedResponse.json()
+  assert.equal(assignedResponse.status, 200)
+  assert.equal(assigned.status, 'ASSIGNED')
+  assert.equal(assigned.vehicleId, 'V-01')
   assert.equal((await assign()).status, 409)
   const feed = await fetch(`${base}/api/audit/events`).then(r => r.json())
   assert.equal(feed.pagination.total, 2)
@@ -338,6 +347,34 @@ test('failed event insertion rolls back collection request creation', async () =
     })
     assert.equal((await fetch(`${base}/api/requests`).then(r => r.json())).length, 0)
     assert.equal((await fetch(`${base}/api/audit/events`).then(r => r.json())).pagination.total, 0)
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    db.close()
+  }
+})
+
+test('failed assignment event insertion rolls back vehicle reservation and request status', async () => {
+  const db = createDatabase(':memory:')
+  const app = createApp({ db })
+  const server = createServer(app)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${server.address().port}`
+  try {
+    const created = await fetch(`${base}/api/requests`, json('POST', { zoneId: 'maj' })).then(r => r.json())
+    db.exec(`CREATE TRIGGER reject_assignment_event BEFORE INSERT ON request_events
+      WHEN NEW.status = 'ASSIGNED'
+      BEGIN SELECT RAISE(ABORT, 'test assignment event failure'); END;`)
+
+    const response = await fetch(`${base}/api/requests/${created.id}/assign`, json('POST', { vehicleId: 'V-01' }))
+    assert.equal(response.status, 500)
+
+    const [request] = await fetch(`${base}/api/requests`).then(r => r.json())
+    assert.equal(request.status, 'NEW')
+    assert.equal(request.vehicleId, null)
+    assert.deepEqual(request.events.map(event => event.status), ['NEW'])
+    const vehicle = (await fetch(`${base}/api/vehicles`).then(r => r.json())).find(item => item.id === 'V-01')
+    assert.equal(vehicle.available, true)
+    assert.equal(vehicle.assignedRequestId, null)
   } finally {
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     db.close()
